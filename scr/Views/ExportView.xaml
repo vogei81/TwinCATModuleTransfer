@@ -1,0 +1,189 @@
+<UserControl x:Class="TwinCATModuleTransfer.Views.ExportView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:TwinCATModuleTransfer.ViewModels">
+    <!-- ViewModel als DataContext -->
+    <UserControl.DataContext>
+        <vm:ExportViewModel/>
+    </UserControl.DataContext>
+
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <!-- Kopf -->
+            <RowDefinition Height="Auto"/>
+            <!-- Status -->
+            <RowDefinition Height="*"/>
+            <!-- Baum -->
+            <RowDefinition Height="Auto"/>
+            <!-- Aktionen -->
+        </Grid.RowDefinitions>
+
+        <!-- ======================= Kopfbereich / Eingaben ======================= -->
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Linke Spalte: 4 Eingabe-Zeilen -->
+            <Grid Grid.Column="0" Margin="0,0,10,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <!-- Solution -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- Start in -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- Basisknoten -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- Optionen -->
+                </Grid.RowDefinitions>
+
+                <!-- ====== Solution (.sln) ====== -->
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="34"/>
+                        <ColumnDefinition Width="34"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="Solution (.sln):" VerticalAlignment="Center" />
+
+                    <TextBox Grid.Column="1"
+                   Text="{Binding SolutionPath, UpdateSourceTrigger=PropertyChanged}"
+                   ToolTip="Pfad zur .sln; Datei kann auch hierher gezogen werden."
+                   AllowDrop="True"
+                   PreviewDragOver="TextBox_PreviewDragOver"
+                   Drop="TextBox_Drop"
+                   HorizontalAlignment="Stretch"
+                   VerticalAlignment="Center"
+                   MinWidth="300"/>
+
+                    <Button Grid.Column="2"
+                  Content="…"
+                  Width="28" Height="24"
+                  Padding="0" Margin="8,0,0,0"
+                  ToolTip="Solution-Datei auswählen"
+                  Command="{Binding BrowseSolutionCommand}"
+                  Panel.ZIndex="1000" />
+
+                    <ComboBox Grid.Column="3"
+                    ItemsSource="{Binding RecentSolutions}"
+                    SelectedItem="{Binding SolutionPath}"
+                    Width="28" Height="24"
+                    Margin="8,0,0,0"
+                    ToolTip="Zuletzt gewählte Solutions">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" ToolTip="{Binding}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+
+                <!-- ====== Start in ====== -->
+                <Grid Grid.Row="1" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="Start in:" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Column="1"
+                    SelectedItem="{Binding DteHost}"
+                    ItemsSource="{Binding DteHosts}"
+                    MinWidth="240"/>
+                    <TextBlock Grid.Column="2" Text="(XAE Shell / Visual Studio)" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                </Grid>
+
+                <!-- ====== Basisknoten ====== -->
+                <Grid Grid.Row="2" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="Basisknoten:" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1"
+                   Text="{Binding BaseTreePath}"
+                   ToolTip="z. B. TIID^Device 1 (EtherCAT)^-KF002 (EK1101)^-KF005 (EK1122)"
+                   MinWidth="300"/>
+
+                    <Button Grid.Column="2" Content="Baum laden" Margin="8,0,0,0" Padding="12,3"
+                  Command="{Binding LoadTreeCommand}"/>
+                </Grid>
+
+                <!-- ====== Optionen ====== -->
+                <StackPanel Grid.Row="3" Orientation="Horizontal">
+                    <CheckBox Content="Links/Mapping sichern" IsChecked="{Binding SaveMappings}"/>
+                    <CheckBox Content="NC‑Achsen aufnehmen" Margin="16,0,0,0" IsChecked="{Binding IncludeNcAxes}"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- Rechte Spalte: Exportordner -->
+            <Grid Grid.Column="1" HorizontalAlignment="Right">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="34"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Exportordner:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox Grid.Column="1" Text="{Binding ExportFolder}" VerticalAlignment="Center"/>
+                <Button Grid.Column="2" Content="…" Width="28" Height="24" Padding="0" Margin="8,0,0,0"
+                ToolTip="Export-Ordner wählen"
+                Command="{Binding BrowseExportFolderCommand}"/>
+            </Grid>
+        </Grid>
+
+        <!-- ======================= Statuszeile ======================= -->
+        <Border Grid.Row="1" Padding="2" BorderThickness="0,1,0,0" BorderBrush="#DDD">
+            <TextBlock Text="{Binding Status}" Foreground="#444" TextWrapping="Wrap"/>
+        </Border>
+
+        <!-- ======================= Baumansicht ======================= -->
+        <Border Grid.Row="2" BorderBrush="#DDD" BorderThickness="1" Padding="8">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <TreeView ItemsSource="{Binding Tree}"
+                  SelectedItemChanged="TreeView_SelectedItemChanged">
+                    <TreeView.Resources>
+                        <HierarchicalDataTemplate DataType="{x:Type vm:SelectionTreeItem}"
+                                      ItemsSource="{Binding Children}">
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding DisplayName}" Margin="6,0,0,0"/>
+                            </StackPanel>
+                        </HierarchicalDataTemplate>
+                    </TreeView.Resources>
+                </TreeView>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ======================= Aktionen ======================= -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="Alles markieren" Margin="0,0,10,0" Command="{Binding CheckAllCommand}"/>
+            <Button Content="Exportieren" Padding="16,6" Command="{Binding ExportCommand}"/>
+        </StackPanel>
+
+        <!-- ======================= Busy-Overlay (Sanduhr + Text) ======================= -->
+        <Grid Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"
+          Background="#60FFFFFF" Cursor="Wait" IsHitTestVisible="True"
+          Panel.ZIndex="9999">
+            <Border CornerRadius="6" Background="#CCFFFFFF" Padding="16"
+              HorizontalAlignment="Center" VerticalAlignment="Center" >
+                <StackPanel Orientation="Vertical" HorizontalAlignment="Center">
+                    <TextBlock Text="{Binding BusyText}" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <ProgressBar Width="260" Height="12" IsIndeterminate="True"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+    </Grid>
+</UserControl>
