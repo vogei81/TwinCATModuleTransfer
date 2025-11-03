@@ -9,6 +9,7 @@ using System.Windows.Input;
 using TwinCATModuleTransfer.Models;
 using TwinCATModuleTransfer.Services;
 using TwinCATModuleTransfer.Utils;
+using static TwinCATModuleTransfer.Services.PackagingService;
 
 namespace TwinCATModuleTransfer.ViewModels
 {
@@ -17,8 +18,8 @@ namespace TwinCATModuleTransfer.ViewModels
         public string SolutionPath { get { return _solutionPath; } set { _solutionPath = value; Raise(); } }
         private string _solutionPath;
 
-        public string ModuleFolder { get { return _moduleFolder; } set { _moduleFolder = value; Raise(); } }
-        private string _moduleFolder;
+        public string PackagePath { get { return _packagePath; } set { _packagePath = value; Raise(); } }
+        private string _packagePath;
 
         public string OldPlcBasePath { get { return _old; } set { _old = value; Raise(); } }
         private string _old;
@@ -39,7 +40,7 @@ namespace TwinCATModuleTransfer.ViewModels
 
         public SelectionTreeItem SelectedTargetParent { get; set; }
 
-        // ---------- Status & Busy ----------
+        // Busy & Status
         private string _status = "";
         public string Status { get { return _status; } set { _status = value; Raise(); } }
 
@@ -71,17 +72,21 @@ namespace TwinCATModuleTransfer.ViewModels
             }
         }
 
-        public ICommand BrowseModuleFolderCommand
+        public ICommand BrowsePackageCommand
         {
             get
             {
                 return new Relay(() =>
                 {
-                    var f = Dialogs.SelectFolder("Export-/Modulordner wählen", ModuleFolder);
+                    var startDir = !string.IsNullOrWhiteSpace(PackagePath)
+                       ? (File.Exists(PackagePath) ? Path.GetDirectoryName(PackagePath) : PackagePath)
+                       : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+                    var f = Dialogs.OpenFile("TwinCAT Modul-Paket (*.tcmodpkg)|*.tcmodpkg", startDir, "Paket auswählen");
                     if (f != null)
                     {
-                        ModuleFolder = f;
-                        SetStatus("Modulordner: " + f);
+                        PackagePath = f;
+                        SetStatus("Paket gewählt: " + f);
                     }
                 });
             }
@@ -166,9 +171,9 @@ namespace TwinCATModuleTransfer.ViewModels
                         SetStatus("Bitte Ziel‑Parent in der Baumansicht wählen.");
                         return;
                     }
-                    if (string.IsNullOrWhiteSpace(ModuleFolder) || !Directory.Exists(ModuleFolder))
+                    if (string.IsNullOrWhiteSpace(PackagePath) || !File.Exists(PackagePath))
                     {
-                        SetStatus("Bitte gültigen Modul-/Exportordner wählen.");
+                        SetStatus("Bitte gültige Paketdatei (*.tcmodpkg) wählen.");
                         return;
                     }
                     if (string.IsNullOrWhiteSpace(SolutionPath) || !File.Exists(SolutionPath))
@@ -195,45 +200,49 @@ namespace TwinCATModuleTransfer.ViewModels
                             SetStatus("Solution geöffnet.");
                         }
 
+                        // Paket entpacken
+                        SetStatus("Paket wird geöffnet …");
+                        var tempWork = Path.Combine(Path.GetTempPath(), "TCModImport_" + Guid.NewGuid().ToString("N"));
+                        var pkg = OpenPackage(PackagePath, tempWork);
+
+                        // Ziel-Parent
                         var target = tc.Lookup(SelectedTargetParent.Path);
                         if (target == null)
                             throw new InvalidOperationException("Ziel‑Parent nicht gefunden: " + SelectedTargetParent.Path);
 
-                        // 1) Module importieren
-                        var files = Directory.GetFiles(ModuleFolder, "*.childexport").OrderBy(f => f)
-                                   .Concat(Directory.GetFiles(ModuleFolder, "*.xml").OrderBy(f => f))
-                                   .ToArray();
-
+                        // In Manifest-Reihenfolge importieren
                         int imported = 0;
-                        foreach (var f in files)
+                        foreach (var it in pkg.Manifest.Items.OrderBy(i => i.Index))
                         {
-                            var name = Path.GetFileName(f);
-                            if (name.Equals("_Mappings.xml", StringComparison.OrdinalIgnoreCase))
-                                continue;
+                            // Child zuerst (wenn vorhanden), dann XML konsumieren
+                            if (!string.IsNullOrEmpty(it.ChildFile))
+                            {
+                                var childAbs = pkg.ResolveItemPath(it.ChildFile);
+                                if (File.Exists(childAbs))
+                                {
+                                    tc.ImportChildInto(target, childAbs);
+                                    SetStatus("ImportChild: " + it.ChildFile);
+                                }
+                            }
 
-                            if (f.EndsWith(".childexport", StringComparison.OrdinalIgnoreCase))
+                            var xmlAbs = pkg.ResolveItemPath(it.XmlFile);
+                            if (File.Exists(xmlAbs))
                             {
-                                tc.ImportChildInto(target, f);
-                                SetStatus("ImportChild: " + name);
-                                imported++;
-                            }
-                            else
-                            {
-                                var xml = File.ReadAllText(f);
+                                var xml = File.ReadAllText(xmlAbs, Encoding.UTF8);
                                 tc.ConsumeItemXml(target, xml);
-                                SetStatus("ConsumeXml: " + name);
-                                imported++;
+                                SetStatus("ConsumeXml: " + it.XmlFile);
                             }
+
+                            imported++;
                         }
 
-                        if (imported == 0) SetStatus("Hinweis: Keine Modul-Dateien im Ordner gefunden.");
+                        if (imported == 0) SetStatus("Hinweis: Keine Items im Paket.");
 
-                        // 2) Mappings
-                        var mappingPath = Path.Combine(ModuleFolder, "_Mappings.xml");
-                        if (File.Exists(mappingPath))
+                        // Mappings anwenden (optional)
+                        if (pkg.Manifest.ContainsMappings && !string.IsNullOrWhiteSpace(pkg.MappingsPath) && File.Exists(pkg.MappingsPath))
                         {
                             SetStatus("Verlinkungen anwenden …");
-                            var oldXml = File.ReadAllText(mappingPath);
+                            var oldXml = File.ReadAllText(pkg.MappingsPath, Encoding.UTF8);
                             var opts = new MappingRewriteOptions
                             {
                                 OldPlcBasePath = OldPlcBasePath,
@@ -245,13 +254,16 @@ namespace TwinCATModuleTransfer.ViewModels
                         }
                         else
                         {
-                            SetStatus("Hinweis: _Mappings.xml nicht gefunden – keine Verlinkungen angewendet.");
+                            SetStatus("Hinweis: Keine Mappings im Paket.");
                         }
 
-                        // 3) Aktivieren
+                        // Aktivieren
                         SetStatus("Aktiviere Konfiguration / TwinCAT Neustart …");
                         tc.ActivateAndRestart();
                         SetStatus("Aktivierung abgeschlossen.");
+
+                        // Temp löschen
+                        try { Directory.Delete(tempWork, true); } catch { }
                     }
                     catch (Exception ex)
                     {
@@ -268,7 +280,7 @@ namespace TwinCATModuleTransfer.ViewModels
             }
         }
 
-        // ---------- Helpers ----------
+        // Helpers
         private async Task YieldToUi()
         {
             try

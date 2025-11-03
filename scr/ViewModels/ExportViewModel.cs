@@ -10,6 +10,7 @@ using System.Windows.Input;
 using TCatSysManagerLib;
 using TwinCATModuleTransfer.Services;
 using TwinCATModuleTransfer.Utils;
+using static TwinCATModuleTransfer.Services.PackagingService;
 
 namespace TwinCATModuleTransfer.ViewModels
 {
@@ -21,19 +22,14 @@ namespace TwinCATModuleTransfer.ViewModels
         public ObservableCollection<string> RecentSolutions { get; private set; }
             = new ObservableCollection<string>();
 
-        public string SolutionPath
-        {
-            get { return _solutionPath; }
-            set { _solutionPath = value; Raise(); }
-        }
+        public string SolutionPath { get { return _solutionPath; } set { _solutionPath = value; Raise(); } }
         private string _solutionPath;
 
-        public string ExportFolder
-        {
-            get { return _exportFolder; }
-            set { _exportFolder = value; Raise(); }
-        }
+        public string ExportFolder { get { return _exportFolder; } set { _exportFolder = value; Raise(); } }
         private string _exportFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "TwinCAT_Module_Export");
+
+        public string PackageFileName { get { return _packageFileName; } set { _packageFileName = value; Raise(); } }
+        private string _packageFileName = "ModuleExport.tcmodpkg";
 
         public string BaseTreePath { get { return _baseTreePath; } set { _baseTreePath = value; Raise(); } }
         private string _baseTreePath = @"TIID^Device 1 (EtherCAT)^-KF002 (EK1101)^-KF005 (EK1122)";
@@ -51,7 +47,7 @@ namespace TwinCATModuleTransfer.ViewModels
 
         public DteHost[] DteHosts { get; } = new[] { DteHost.XaeShell, DteHost.VisualStudio2017 };
 
-        // ---------- Status & Busy ----------
+        // Status & Busy
         private string _status = "";
         public string Status { get { return _status; } set { _status = value; Raise(); } }
 
@@ -61,7 +57,6 @@ namespace TwinCATModuleTransfer.ViewModels
         private string _busyText;
         public string BusyText { get { return _busyText; } set { _busyText = value; Raise(); } }
 
-        // merkt sich, welche Solution über den langlebigen Service offen ist
         private string _openedSolutionPath;
 
         public ICommand BrowseSolutionCommand
@@ -95,11 +90,11 @@ namespace TwinCATModuleTransfer.ViewModels
             {
                 return new Relay(() =>
                 {
-                    var f = Dialogs.SelectFolder("Exportordner wählen", ExportFolder);
+                    var f = Dialogs.SelectFolder("Zielordner für Paket wählen", ExportFolder);
                     if (!string.IsNullOrEmpty(f))
                     {
                         ExportFolder = f;
-                        SetStatus("Exportordner: " + f);
+                        SetStatus("Paket-Zielordner: " + f);
                     }
                 });
             }
@@ -117,10 +112,9 @@ namespace TwinCATModuleTransfer.ViewModels
                         return;
                     }
 
-                    // Busy sofort anzeigen
                     BusyText = "Solution wird geladen …";
                     IsBusy = true;
-                    await YieldToUi(); // UI rendern lassen, Overlay wird sichtbar
+                    await YieldToUi();
 
                     try
                     {
@@ -141,11 +135,9 @@ namespace TwinCATModuleTransfer.ViewModels
                         BusyText = "Basisknoten prüfen …";
                         await YieldToUi();
 
-                        // 1) eingestellter Basispfad
                         try { baseItem = tc.Lookup(BaseTreePath); }
                         catch (COMException) { baseItem = null; }
 
-                        // 2) Auto-Detect unter TIID
                         if (baseItem == null)
                         {
                             SetStatus("Suche Basisknoten (Auto‑Detect) …");
@@ -169,11 +161,9 @@ namespace TwinCATModuleTransfer.ViewModels
                         {
                             BusyText = "Baumaufbau I/O …";
                             await YieldToUi();
-
                             Tree.Add(ProjectTreeService.BuildTreeFrom(baseItem, baseItem.Name, true, 10));
                         }
 
-                        // NC/Motion
                         if (IncludeNcAxes)
                         {
                             BusyText = "Suche NC/Motion …";
@@ -248,7 +238,7 @@ namespace TwinCATModuleTransfer.ViewModels
                         return;
                     }
 
-                    BusyText = "Export läuft …";
+                    BusyText = "Export-Paket wird erstellt …";
                     IsBusy = true;
                     await YieldToUi();
 
@@ -262,6 +252,22 @@ namespace TwinCATModuleTransfer.ViewModels
                             _openedSolutionPath = SolutionPath;
                         }
 
+                        // Temporärer Arbeitsordner
+                        var work = Path.Combine(Path.GetTempPath(), "TCModPkg_" + Guid.NewGuid().ToString("N"));
+                        Directory.CreateDirectory(work);
+                        var itemsDir = Path.Combine(work, "items");
+                        var childDir = Path.Combine(work, "child");
+                        Directory.CreateDirectory(itemsDir);
+                        Directory.CreateDirectory(childDir);
+
+                        var manifest = new PackageManifest
+                        {
+                            ExportedAtUtc = DateTime.UtcNow.ToString("o"),
+                            ContainsMappings = SaveMappings,
+                            Comment = "Module export generated by TwinCATModuleTransfer"
+                        };
+                        var files = new System.Collections.Generic.List<PackageFile>();
+
                         int idx = 0;
                         int exported = 0;
 
@@ -270,28 +276,69 @@ namespace TwinCATModuleTransfer.ViewModels
                             foreach (var node in ProjectTreeService.EnumerateChecked(root))
                             {
                                 var item = tc.Lookup(node.Path);
-                                var safeName = Sanitize(item.Name) + "_" + (++idx);
-                                var xmlFile = Path.Combine(ExportFolder, safeName + ".xml");
-                                var tceFile = Path.Combine(ExportFolder, safeName + ".childexport");
+                                var safe = Sanitize(item.Name);
+                                idx++;
 
+                                // Item-XML
+                                var xmlRel = string.Format("items/{0:000}_{1}.xml", idx, safe);
+                                var xmlAbs = Path.Combine(work, xmlRel.Replace('/', Path.DirectorySeparatorChar));
                                 var xml = tc.ProduceItemXml(item);
-                                File.WriteAllText(xmlFile, xml);
-                                SetStatus("XML exportiert: " + safeName + ".xml");
+                                File.WriteAllText(xmlAbs, xml, Encoding.UTF8);
+                                files.Add(new PackageFile { SourceFilePath = xmlAbs, PackageRelativePath = xmlRel });
+                                SetStatus("XML exportiert: " + xmlRel);
 
-                                try { tc.ExportChild(item, tceFile); SetStatus("Child exportiert: " + safeName + ".childexport"); } catch { }
+                                // Child-Export (best effort)
+                                string childRel = null;
+                                try
+                                {
+                                    var childRelTmp = string.Format("child/{0:000}_{1}.childexport", idx, safe);
+                                    var childAbs = Path.Combine(work, childRelTmp.Replace('/', Path.DirectorySeparatorChar));
+                                    tc.ExportChild(item, childAbs);
+                                    files.Add(new PackageFile { SourceFilePath = childAbs, PackageRelativePath = childRelTmp });
+                                    SetStatus("Child exportiert: " + childRelTmp);
+                                    childRel = childRelTmp;
+                                }
+                                catch { /* einige Items unterstützen ExportChild nicht */ }
+
+                                manifest.Items.Add(new ManifestItem
+                                {
+                                    Index = idx,
+                                    Name = item.Name,
+                                    TwinCatPath = node.Path,
+                                    XmlFile = xmlRel,
+                                    ChildFile = childRel,
+                                    ItemGuid = Guid.NewGuid().ToString("D") // optional stabil
+                                });
                                 exported++;
                             }
                         }
 
+                        // Mappings
                         if (SaveMappings)
                         {
                             SetStatus("Erzeuge Mappings …");
                             var mapping = tc.ProduceMappingInfo();
-                            File.WriteAllText(Path.Combine(ExportFolder, "_Mappings.xml"), mapping);
-                            SetStatus("Mappings gespeichert: _Mappings.xml");
+                            var mapAbs = Path.Combine(work, "_Mappings.xml");
+                            File.WriteAllText(mapAbs, mapping, Encoding.UTF8);
+                            files.Add(new PackageFile { SourceFilePath = mapAbs, PackageRelativePath = "_Mappings.xml" });
+                            SetStatus("Mappings hinzugefügt.");
                         }
 
-                        SetStatus(string.Format("Export abgeschlossen. {0} Elemente exportiert.", exported));
+                        // Paketdatei erzeugen
+                        var outName = PackageFileName;
+                        if (string.IsNullOrWhiteSpace(outName)) outName = "ModuleExport.tcmodpkg";
+                        if (!outName.EndsWith(PackageExtension, StringComparison.OrdinalIgnoreCase))
+                            outName += PackageExtension;
+
+                        var outPath = Path.Combine(ExportFolder, outName);
+                        SetStatus("Erzeuge Paket: " + outPath);
+
+                        CreatePackage(outPath, manifest, files);
+
+                        // Temp wegräumen
+                        try { Directory.Delete(work, true); } catch { }
+
+                        SetStatus(string.Format("Export abgeschlossen. {0} Items im Paket.", exported));
                     }
                     catch (Exception ex)
                     {
@@ -306,7 +353,7 @@ namespace TwinCATModuleTransfer.ViewModels
             }
         }
 
-        // ---------- Helpers ----------
+        // Helpers
         private async Task YieldToUi()
         {
             try
@@ -321,10 +368,7 @@ namespace TwinCATModuleTransfer.ViewModels
                     await Task.Delay(50);
                 }
             }
-            catch
-            {
-                // not fatal
-            }
+            catch { }
         }
 
         private void SetStatus(string message)
